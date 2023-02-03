@@ -1,0 +1,7 @@
+---
+- name: Clone frontpage from Github
+  git:
+    repo: https://github.com/ImmortalDisorderOT/immortaldisorder-homepage.git
+    dest: /home/otsmanager/www/public_html
+  become: true
+  become_user: otsmanager

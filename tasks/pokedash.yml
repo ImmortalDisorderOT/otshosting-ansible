@@ -1,0 +1,119 @@
+---
+- name: Install packages needed to compile TFS
+  apt:
+    state: latest
+    pkg:
+      - git
+      - cmake
+      - build-essential
+      - libmysqlclient-dev
+      - libboost-system-dev
+      - libboost-date-time-dev
+      - libboost-filesystem-dev
+      - libboost-iostreams-dev
+      - libcrypto++-dev
+      - liblua5.2-dev
+      - libluajit-5.1-dev
+      - libpugixml-dev
+      - libfmt-dev
+
+- name: Install systemd service for Pokedash
+  template:
+    src: templates/{{item}}
+    dest: /etc/systemd/system/{{item}}
+  with_items:
+    - pokedash.service
+
+- name: Download latest pokedash from git
+  git:
+    repo: https://github.com/ImmortalDisorderOT/pokedash-server.git
+    dest: /home/otsmanager/pokedash
+  become: true
+  become_user: otsmanager
+
+- name: Parse existing config.lua
+  shell: grep -s mysqlPass /home/otsmanager/pokedash/config.lua | sed -E 's/mysqlPass = "(.*)"/\1/g'
+  register: existingpass
+
+- name: Generate random MySQL pokedash password
+  command: openssl rand -base64 18
+  register: randompass
+  when: not existingpass.stdout
+
+- set_fact:
+    mysql_pokedash_pass: "{{ randompass.stdout if randompass is not skipped else existingpass.stdout }}"
+
+- name: Create database user for TFS
+  mysql_user:
+    name: pokedash
+    password: "{{mysql_pokedash_pass}}"
+    priv: pokedash.*:ALL
+    check_implicit_admin: yes
+
+- name: Create database for TFS
+  mysql_db:
+    name: pokedash
+
+- name: Import database for TFS
+  mysql_db:
+    name: pokedash
+    state: import
+    target: /home/otsmanager/pokedash/schema.sql
+
+- name: Copy config.lua.dist to config.lua if necessary
+  copy:
+    dest: /home/otsmanager/pokedash/config.lua
+    src: /home/otsmanager/pokedash/config.lua.dist
+    remote_src: yes
+    owner: otsmanager
+    group: otsmanager
+
+- name: Put mysqlHost for database in config.lua
+  lineinfile:
+    dest: /home/otsmanager/pokedash/config.lua
+    regexp: ^mysqlHost
+    line: 'mysqlHost = "localhost"'
+
+- name: Put mysqlSock for database in config.lua
+  lineinfile:
+    dest: /home/otsmanager/pokedash/config.lua
+    regexp: ^mysqlSock
+    line: 'mysqlSock = "/var/run/mysqld/mysqld.sock"'
+
+- name: Put password for database in config.lua
+  lineinfile:
+    dest: /home/otsmanager/pokedash/config.lua
+    regexp: ^mysqlPass
+    line: 'mysqlPass = "{{mysql_pokedash_pass}}"'
+
+- name: Put server's IP address in config.lua
+  lineinfile:
+    dest: /home/otsmanager/pokedash/config.lua
+    regexp: "^ip ="
+    line: 'ip = "{{ansible_default_ipv4.address}}"'
+
+- name: Create build directory
+  file:
+    path: /home/otsmanager/pokedash/build
+    owner: otsmanager
+    group: otsmanager
+    mode: 0755
+    state: directory
+  become: true
+  become_user: otsmanager
+
+- name: Cmake pokedash source
+  command: cmake ..
+  args:
+    chdir: /home/otsmanager/pokedash/build
+  tags: compile
+  become: true
+  become_user: otsmanager
+
+- name: Compile pokedash source
+  command: make -j2
+  args:
+    chdir: /home/otsmanager/pokedash/build
+  tags: compile
+  become: true
+  become_user: otsmanager
